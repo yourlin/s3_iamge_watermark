@@ -1,9 +1,9 @@
 import json
 import os
 from enum import Enum
-from urllib import parse
+
 import boto3
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 s3 = boto3.client('s3')
 wm_bucket = 'linyesh-mihoyo-origin-image'
@@ -26,6 +26,7 @@ class Position(Enum):
     TOP_RIGHT = 2
     BOTTOM_LEFT = 3
     BOTTOM_RIGHT = 4
+    FILL = 5
 
 
 def get_relative_position(img_size, wm_size=(0, 0), position=Position.BOTTOM_RIGHT, relative_x=0, relative_y=0):
@@ -54,7 +55,21 @@ def get_relative_position(img_size, wm_size=(0, 0), position=Position.BOTTOM_RIG
     return x, y
 
 
-def image_watermark(img_file, wm_file, position=Position.BOTTOM_RIGHT, relative_x=0, relative_y=0):
+def image_watermark(img_file, wm_file,
+                    position=Position.BOTTOM_RIGHT, relative_x=0, relative_y=0,
+                    shadow_radius=0, shadow_x=10, shadow_y=10):
+    """
+    图片水印
+    @param img_file: 原图文件路径
+    @param wm_file: 水印图文件路径
+    @param position: 位置
+    @param relative_x: 图片相对x偏移量
+    @param relative_y: 图片相对y偏移量
+    @param shadow_radius: 阴影模糊半径, 模糊半径>0的时候启用阴影
+    @param shadow_x: 阴影x偏移量
+    @param shadow_y: 阴影y偏移量
+    @return:
+    """
     try:
         if not os.path.exists(wm_file):
             s3.download_file(wm_bucket, wm_key, wm_file)
@@ -66,13 +81,23 @@ def image_watermark(img_file, wm_file, position=Position.BOTTOM_RIGHT, relative_
         # 如果图片大小小于水印大小
         if img_size[0] < wm_size[0]:
             watermark.resize(tuple(map(lambda x: int(x * 0.5), watermark.size)))
-        # 新建一个图层
-        layer = Image.new('RGBA', img.size)
-        # 将水印图片添加到图层上
-        layer.paste(watermark, get_relative_position(img_size, wm_size, position, relative_x, relative_y))
-        mark_img = Image.composite(layer, img, layer)
+        # 新建水印图层
+        wm_layer = Image.new('RGBA', img_size)
+
+        # 将水印图片添加到图层
+        wm_position = get_relative_position(img_size, wm_size, position, relative_x, relative_y)
+        wm_layer.paste(watermark, wm_position)
+
+        if shadow_radius > 0:
+            layer_shadow = Image.new('RGBA', img_size)
+            wm_shadow_position = (wm_position[0] + shadow_x, wm_position[1] + shadow_y)
+            layer_shadow.paste(watermark, wm_shadow_position)
+            layer_shadow = layer_shadow.filter(ImageFilter.GaussianBlur(radius=shadow_radius))
+            img = Image.composite(layer_shadow, img, layer_shadow)
+        result_img = Image.composite(wm_layer, img, wm_layer)
         new_file_name = os.path.join(save_path, img_file.split('/')[-1])
-        mark_img.save(new_file_name)
+        result_img.save(new_file_name)
+        result_img.show()
 
         return new_file_name
     except Exception as e:
@@ -82,21 +107,51 @@ def image_watermark(img_file, wm_file, position=Position.BOTTOM_RIGHT, relative_
 def text_watermark(img_file, text,
                    font=ImageFont.truetype('../../watermark/fonts/wqy-zenhei.ttc', 60),
                    text_color=(50, 50, 50, 255),
-                   position=Position.BOTTOM_RIGHT,
-                   x=10,
-                   y=10):
+                   position=Position.BOTTOM_RIGHT, x=10, y=10,
+                   shadow_radius=0, shadow_x=10, shadow_y=10,
+                   rotate_angle=0):
+    """
+    文字水印
+    @param img_file: 图片路径
+    @param text: 文本信息
+    @param font: 字体
+    @param text_color: 文本颜色（R,G,B,A）
+    @param position: 位置信息
+    @param x: x偏移量
+    @param y: y偏移量
+    @param shadow_radius: 阴影模糊半径, 模糊半径>0的时候启用阴影
+    @param shadow_x: 阴影x偏移量
+    @param shadow_y: 阴影y偏移量
+    @param rotate_angle: 转动角度
+    @return:
+    """
     try:
         img = Image.open(img_file)  # 打开图片
-        draw = ImageDraw.Draw(img)
-        relative_position = get_relative_position(img.size,
-                                                  wm_size=draw.textsize(text, font=font),
-                                                  position=position,
-                                                  relative_x=x,
-                                                  relative_y=y)
-        draw.text(relative_position, text, font=font, fill=text_color)
+        wm_size = font.getsize(text)
+        watermark = Image.new('RGBA', wm_size)
+        wm_draw = ImageDraw.Draw(watermark)
+        wm_draw.text((0, 0), text, font=font, fill=text_color)
+        if rotate_angle > 0:
+            watermark = watermark.rotate(rotate_angle, expand=1)
+        # 新建水印图层
+        wm_layer = Image.new('RGBA', img.size)
+        wm_position = get_relative_position(img.size,
+                                            wm_size=watermark.size,
+                                            position=position,
+                                            relative_x=x,
+                                            relative_y=y)
+        wm_layer.paste(watermark, wm_position)
+        if shadow_radius > 0:
+            layer_shadow = Image.new('RGBA', img.size)
+            wm_shadow_position = (wm_position[0] + shadow_x, wm_position[1] + shadow_y)
+            layer_shadow.paste(watermark, wm_shadow_position)
+            layer_shadow = layer_shadow.filter(ImageFilter.GaussianBlur(radius=shadow_radius))
+            img = Image.composite(layer_shadow, img, layer_shadow)
+
+        result_img = Image.composite(wm_layer, img, wm_layer)
         new_file_name = os.path.join(save_path, img_file.split('/')[-1])
-        img.save(new_file_name)
-        img.show()
+        result_img.save(new_file_name)
+        result_img.show()
 
         return new_file_name
     except Exception as e:
@@ -135,8 +190,9 @@ def lambda_handler(event, context):
     # 从S3下载原图在本地进行处理
     s3.download_file(img_bucket, img_key, img_file)
     try:
-        new_file_name = text_watermark(img_file, 'ひらがな - Hiragana, 히라가나 天空之城', position=Position.TOP_LEFT)
-        # new_file_name = image_watermark(img_file, my_wm_file, Position.BOTTOM_RIGHT, 20, 20)
+        new_file_name = text_watermark(img_file, 'ひらがな - Hiragana, 히라가나 天空之城', position=Position.BOTTOM_RIGHT,
+                                       shadow_radius=5, shadow_x=10, shadow_y=10, rotate_angle=30)
+        # new_file_name = image_watermark(img_file, my_wm_file, Position.BOTTOM_RIGHT, 20, 20, 5, 10, 10)
         # tags = {"updated": "1", 'watermark': '1'}
         # s3.upload_file(new_file_name,
         #                target_bucket,
@@ -144,6 +200,7 @@ def lambda_handler(event, context):
         #                ExtraArgs={"Tagging": parse.urlencode(tags)}
         #                )
     except Exception as e:
+        print(e)
         return {
             "statusCode": 500,
             "body": json.dumps({
