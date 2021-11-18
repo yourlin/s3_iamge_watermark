@@ -21,6 +21,7 @@ def lambda_handler(event, context):
             is_updated = True
             break
     if not is_updated:
+        # TODO: 判断是否是image类型
         requests.get(api_url, {
             'bucket': 1,
             'key': '2'

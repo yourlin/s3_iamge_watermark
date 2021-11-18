@@ -455,3 +455,5 @@ dmypy.json
 cython_debug/
 
 .idea
+
+.aws-sam
