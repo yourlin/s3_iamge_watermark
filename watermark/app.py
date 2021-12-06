@@ -8,7 +8,7 @@ from mimetypes import guess_type
 from urllib import parse
 
 import boto3
-from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageColor
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageColor, ImageSequence
 
 # Tips: 使用pillow-simd替代pillow可以获得更好的性能
 # https://python-pillow.org/pillow-perf/
@@ -254,7 +254,6 @@ def get_position_mapping(position_text):
     return position
 
 
-# todo: gif添加水印
 def watermark_handler(img, options=None):
     """
     水印处理
@@ -324,15 +323,10 @@ def watermark_handler(img, options=None):
 
 
 def lambda_handler(event, context):
-    # https://linyesh-mihoyo-origin-image.s3.ap-southeast-1.amazonaws.com/origin.jpg?x-oss-process=image
-    # /resize,w_300,h_300
-    # /watermark,type_d3F5LXplbmhlaQ,size_30,text_SGVsbG8gV29ybGQ,color_FFFFFF,shadow_50,t_100,g_se,x_10,y_10
     method = event['httpMethod']
     parameters = []
     body = json.loads(event['body'])
     headers = event['headers']
-    # img_bucket = headers['Host'].split('.')[0]
-    # img_key = event['path'].strip('/')
     img_bucket = body['origin-bucket']
     img_key = body['origin-key']
     if 'target-bucket' not in body:
@@ -343,7 +337,14 @@ def lambda_handler(event, context):
         target_key = img_key
     else:
         target_key = body['target-key']
-    # if method == 'POST':
+
+    if 'x-s3-process' not in event['queryStringParameters']:
+        return {
+            "statusCode": 500,
+            "body": json.dumps({
+                "message": 'invalid parameters',
+            }),
+        }
     parameters = event['queryStringParameters']['x-s3-process'].split('/')
     # print("parameters: %s" % parameters)
 
@@ -361,6 +362,15 @@ def lambda_handler(event, context):
     t1 = time.time()
     s3.download_file(img_bucket, img_key, img_file)
     print('下载原图耗时%.3fs' % (time.time() - t1))
+    file_mine = guess_type(img_file)
+    (file_type, file_ext) = file_mine[0].split('/')
+    if file_type != 'image':
+        return {
+            "statusCode": 500,
+            "body": json.dumps({
+                "message": 'invalid file format',
+            }),
+        }
     # 图片已经处理过，则不操作
     response = s3.get_object_tagging(
         Bucket=img_bucket,
@@ -380,38 +390,55 @@ def lambda_handler(event, context):
     # 图像处理
     with Image.open(img_file) as result_img:  # 打开图片
         quality = 100
-        for parameter in parameters[1:]:
-            op_list = parameter.split(',')
-            op = op_list[0]
-            op_parameter_dict = {}
-            for op_parameter in op_list[1:]:
-                kp = op_parameter.split('_')
-                op_parameter_dict[kp[0]] = kp[1]
+        img_list = []
+        if file_ext == 'gif':
+            for f in ImageSequence.Iterator(result_img):
+                img_list.append(f.copy())
+        else:
+            img_list.append(result_img)
 
-            if op == 'watermark':
-                t1 = time.time()
-                result_img = watermark_handler(result_img, options=op_parameter_dict)
-                print('水印处理耗时%.3fs' % (time.time() - t1))
-            elif op == 'resize':
-                t1 = time.time()
-                result_img = image_resize_handler(result_img, options=op_parameter_dict)
-                print('图片缩放处理耗时%.3fs' % (time.time() - t1))
-            elif op == 'quality':
-                if 'q' in op_parameter_dict:
-                    quality = 100 * op_parameter_dict['q']
-            else:
-                return {
-                    "statusCode": 500,
-                    "body": json.dumps({
-                        "message": 'invalid parameters',
-                    }),
-                }
+
+        for i in range(len(img_list)):
+            cur_img = img_list[i]
+            for parameter in parameters[1:]:
+                op_list = parameter.split(',')
+                op = op_list[0]
+                op_parameter_dict = {}
+                for op_parameter in op_list[1:]:
+                    kp = op_parameter.split('_')
+                    op_parameter_dict[kp[0]] = kp[1]
+
+                if op == 'watermark':
+                    t1 = time.time()
+                    cur_img = watermark_handler(cur_img, options=op_parameter_dict)
+
+                    print('水印处理耗时%.3fs' % (time.time() - t1))
+                elif op == 'resize':
+                    t1 = time.time()
+                    cur_img = image_resize_handler(cur_img, options=op_parameter_dict)
+                    print('图片缩放处理耗时%.3fs' % (time.time() - t1))
+                elif op == 'quality':
+                    if 'q' in op_parameter_dict:
+                        quality = 100 * op_parameter_dict['q']
+                else:
+                    return {
+                        "statusCode": 500,
+                        "body": json.dumps({
+                            "message": 'invalid parameters',
+                        }),
+                    }
+                img_list[i] = cur_img
         # 图片上传
-        if result_img is not None:
-            # result_img.show()
+        if len(img_list) > 0:
             new_file_name = os.path.join(save_path, img_file.split('/')[-1])
-            result_img.save(new_file_name, quality=quality)
-            file_mine = guess_type(new_file_name)
+            if len(img_list) == 1:
+                img_list[0].save(new_file_name, quality=quality)
+            else:
+                img_list[0].save(new_file_name,
+                                 append_images=img_list[1:],
+                                 save_all=True,
+                                 loop=0
+                                 )
             tags = {"updated": "1", 'watermark': '1'}
             s3.upload_file(new_file_name,
                            target_bucket,

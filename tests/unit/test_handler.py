@@ -132,6 +132,69 @@ def api_gw_event_image():
 
 
 @pytest.fixture()
+def api_gw_event_gif_text():
+    return {
+        "body": json.dumps({
+            "origin-bucket": "linyesh-mihoyo-origin-image",
+            "origin-key": "20180119174149294.gif",
+            "target-bucket": "linyesh-mihoyo-origin-image",
+            "target-key": "result.gif",
+        }),
+        "resource": "/{proxy+}",
+        "requestContext": {
+            "resourceId": "123456",
+            "apiId": "1234567890",
+            "resourcePath": "/{proxy+}",
+            "httpMethod": "POST",
+            "requestId": "c6af9ac6-7b61-11e6-9a41-93e8deadbeef",
+            "accountId": "123456789012",
+            "identity": {
+                "apiKey": "",
+                "userArn": "",
+                "cognitoAuthenticationType": "",
+                "caller": "",
+                "userAgent": "Custom User Agent String",
+                "user": "",
+                "cognitoIdentityPoolId": "",
+                "cognitoIdentityId": "",
+                "cognitoAuthenticationProvider": "",
+                "sourceIp": "127.0.0.1",
+                "accountId": "",
+            },
+            "stage": "prod",
+        },
+        "queryStringParameters": {
+            "x-s3-process": "image/watermark,type_d3F5LXplbmhlaQ,size_30,"
+                            "text_44Gy44KJ44GM44GqIC0gSGlyYWdhbmEsIO2eiOudvOqwgOuCmCDlpKnnqbrkuYvln44=,"
+                            "color_222222,shadow_50,t_70,g_se,x_10,y_10,rotate_30", },
+        "headers": {
+            "Via": "1.1 08f323deadbeefa7af34d5feb414ce27.cloudfront.net (CloudFront)",
+            "Accept-Language": "en-US,en;q=0.8",
+            "CloudFront-Is-Desktop-Viewer": "true",
+            "CloudFront-Is-SmartTV-Viewer": "false",
+            "CloudFront-Is-Mobile-Viewer": "false",
+            "X-Forwarded-For": "127.0.0.1, 127.0.0.2",
+            "CloudFront-Viewer-Country": "US",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Upgrade-Insecure-Requests": "1",
+            "X-Forwarded-Port": "443",
+            "Host": "linyesh-mihoyo-origin-image.s3.ap-southeast-1.amazonaws.com",
+            "X-Forwarded-Proto": "https",
+            "X-Amz-Cf-Id": "aaaaaaaaaae3VYQb9jd-nvCd-de396Uhbp027Y2JvkCPNLmGJHqlaA==",
+            "CloudFront-Is-Tablet-Viewer": "false",
+            "Cache-Control": "max-age=0",
+            "User-Agent": "Custom User Agent String",
+            "CloudFront-Forwarded-Proto": "https",
+            "Accept-Encoding": "gzip, deflate, sdch",
+        },
+        "pathParameters": {"proxy": "/"},
+        "httpMethod": "POST",
+        "stageVariables": {"baz": "qux"},
+        "path": "/origin.jpg",
+    }
+
+
+@pytest.fixture()
 def s3_created_put_event():
     return {
         "Records": [
@@ -187,7 +250,6 @@ def test_text_lambda_handler(api_gw_event_text):
     assert ret["statusCode"] == 200
     assert "message" in ret["body"]
     assert data["message"] == "OK"
-    # assert "location" in data.dict_keys()
 
 
 def test_img_lambda_handler(api_gw_event_image):
@@ -197,4 +259,12 @@ def test_img_lambda_handler(api_gw_event_image):
     assert ret["statusCode"] == 200
     assert "message" in ret["body"]
     assert data["message"] == "OK"
-    # assert "location" in data.dict_keys()
+
+
+def test_gif_lambda_handler(api_gw_event_gif_text):
+    ret = app.lambda_handler(api_gw_event_gif_text, "")
+    data = json.loads(ret["body"])
+
+    assert ret["statusCode"] == 200
+    assert "message" in ret["body"]
+    assert data["message"] == "OK"
