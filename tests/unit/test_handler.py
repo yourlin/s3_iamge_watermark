@@ -9,6 +9,10 @@ from watermark import app
 def api_gw_event_text():
     return {
         "body": json.dumps({
+            "origin-bucket": "linyesh-mihoyo-origin-image",
+            "origin-key": "origin.jpg",
+            "target-bucket": "linyesh-mihoyo-origin-image",
+            "target-key": "result.jpg",
         }),
         "resource": "/{proxy+}",
         "requestContext": {

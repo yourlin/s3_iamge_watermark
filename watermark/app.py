@@ -4,6 +4,8 @@ import os
 import time
 from base64 import b64decode
 from enum import Enum
+from mimetypes import guess_type
+from urllib import parse
 
 import boto3
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageColor
@@ -214,11 +216,11 @@ def get_font_path(font_name):
     @param font_name: 字体名
     @return:
     """
-    file_path = 'watermark/fonts/wqy-zenhei.ttc'
+    file_path = 'fonts/wqy-zenhei.ttc'
     if os.path.exists(file_path):
         return file_path
-    elif os.path.exists(os.path.join('../../', file_path)):
-        return os.path.join('../../', file_path)
+    elif os.path.exists(os.path.join('../../watermark/', file_path)):
+        return os.path.join('../../watermark/', file_path)
     else:
         return None
 
@@ -276,19 +278,16 @@ def watermark_handler(img, options=None):
                        'image': None  # bucket/object_key, 例如 linyesh-mihoyo-origin-image/do-not-copy-g08c635b44_640.png
                        }
     options = {**default_options, **options}
+    print('合并：' + json.dumps(options))
     try:
         position = get_position_mapping(options['g'])
         if options['image'] is None:
+            print('开始处理文本水印')
             font_path = get_font_path(options['type'])
             font_size = int(options['size'])
             font = ImageFont.truetype(font_path, font_size)
             if font is None:
-                return {
-                    "statusCode": 500,
-                    "body": json.dumps({
-                        "message": "Can't find font file",
-                    }),
-                }
+                raise Exception("未找到字体文件")
             alpha = int(float(options['t']) / 100.0 * 255)
             text_color = ImageColor.getcolor('#' + options['color'], "RGB") + (alpha,)
             result_img = text_watermark(img,
@@ -303,6 +302,7 @@ def watermark_handler(img, options=None):
                                         shadow_y=int(options['shadow_y']),
                                         rotate_angle=int(options['rotate']))
         else:
+            print('开始处理图片水印')
             my_wm_file = os.path.join('/tmp/wm', time.time(), '.jpg')
             img_sp = options['image'].split('/')
             wm_bucket = img_sp[0]
@@ -320,12 +320,7 @@ def watermark_handler(img, options=None):
                                          )
         return result_img
     except Exception as e:
-        return {
-            "statusCode": 500,
-            "body": json.dumps({
-                "message": e,
-            }),
-        }
+        raise e
 
 
 def lambda_handler(event, context):
@@ -334,14 +329,23 @@ def lambda_handler(event, context):
     # /watermark,type_d3F5LXplbmhlaQ,size_30,text_SGVsbG8gV29ybGQ,color_FFFFFF,shadow_50,t_100,g_se,x_10,y_10
     method = event['httpMethod']
     parameters = []
-
+    body = json.loads(event['body'])
     headers = event['headers']
-    img_bucket = headers['Host'].split('.')[0]
-    img_key = event['path'].strip('/')
-    target_bucket = img_bucket
-    target_key = img_key
+    # img_bucket = headers['Host'].split('.')[0]
+    # img_key = event['path'].strip('/')
+    img_bucket = body['origin-bucket']
+    img_key = body['origin-key']
+    if 'target-bucket' not in body:
+        target_bucket = img_bucket
+    else:
+        target_bucket = body['target-bucket']
+    if 'target-key' not in body:
+        target_key = img_key
+    else:
+        target_key = body['target-key']
     # if method == 'POST':
     parameters = event['queryStringParameters']['x-s3-process'].split('/')
+    # print("parameters: %s" % parameters)
 
     img_file = os.path.join(img_path, img_key)
     process_target = parameters[0]
@@ -373,7 +377,7 @@ def lambda_handler(event, context):
                 "message": 'OK',
             }),
         }
-
+    # 图像处理
     with Image.open(img_file) as result_img:  # 打开图片
         quality = 100
         for parameter in parameters[1:]:
@@ -390,10 +394,11 @@ def lambda_handler(event, context):
                 print('水印处理耗时%.3fs' % (time.time() - t1))
             elif op == 'resize':
                 t1 = time.time()
-                if 'q' in op_parameter_dict:
-                    quality = 100 * op_parameter_dict['q']
                 result_img = image_resize_handler(result_img, options=op_parameter_dict)
                 print('图片缩放处理耗时%.3fs' % (time.time() - t1))
+            elif op == 'quality':
+                if 'q' in op_parameter_dict:
+                    quality = 100 * op_parameter_dict['q']
             else:
                 return {
                     "statusCode": 500,
@@ -401,18 +406,20 @@ def lambda_handler(event, context):
                         "message": 'invalid parameters',
                     }),
                 }
-
+        # 图片上传
         if result_img is not None:
-            result_img.show()
+            # result_img.show()
             new_file_name = os.path.join(save_path, img_file.split('/')[-1])
             result_img.save(new_file_name, quality=quality)
-            if replacement:
-                tags = {"updated": "1", 'watermark': '1'}
-                s3.upload_file(new_file_name,
-                               target_bucket,
-                               target_key,
-                               ExtraArgs={"Tagging": parse.urlencode(tags)}
-                               )
+            file_mine = guess_type(new_file_name)
+            tags = {"updated": "1", 'watermark': '1'}
+            s3.upload_file(new_file_name,
+                           target_bucket,
+                           target_key,
+                           ExtraArgs={
+                               "Tagging": parse.urlencode(tags),
+                               'ContentType': file_mine[0]
+                           })
 
     return {
         "statusCode": 200,
